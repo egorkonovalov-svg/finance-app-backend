@@ -30,3 +30,17 @@ class AuthResponse(BaseModel):
     user: UserResponse
     access_token: str
     refresh_token: str | None = None
+
+
+class VerificationPendingResponse(BaseModel):
+    session_id: str
+    message: str
+
+
+class VerifyCodeRequest(BaseModel):
+    session_id: str
+    code: str = Field(min_length=6, max_length=6)
+
+
+class ResendCodeRequest(BaseModel):
+    session_id: str

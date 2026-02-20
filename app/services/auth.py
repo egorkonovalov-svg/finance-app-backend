@@ -1,9 +1,17 @@
+import secrets
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import bcrypt
+from fastapi import HTTPException, status
 from jose import jwt
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.verification_code import VerificationCode
+
+MAX_VERIFICATION_ATTEMPTS = 5
 
 
 def hash_password(password: str) -> str:
@@ -20,6 +28,66 @@ def create_access_token(user_id: str) -> str:
     )
     payload = {"sub": user_id, "exp": expire}
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def generate_verification_code() -> str:
+    return f"{secrets.randbelow(1000000):06d}"
+
+
+async def create_verification(
+    db: AsyncSession, user_id: UUID, purpose: str
+) -> tuple[str, str]:
+    code = generate_verification_code()
+    expires = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.VERIFICATION_CODE_EXPIRE_MINUTES
+    )
+    record = VerificationCode(
+        user_id=user_id, code=code, purpose=purpose, expires_at=expires
+    )
+    db.add(record)
+    await db.flush()
+    session_id = str(record.id)
+    await db.commit()
+    return session_id, code
+
+
+async def validate_verification_code(
+    db: AsyncSession, session_id: str, code: str
+) -> VerificationCode:
+    result = await db.execute(
+        select(VerificationCode).where(VerificationCode.id == UUID(session_id))
+    )
+    record = result.scalar_one_or_none()
+
+    if not record or record.used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification session",
+        )
+
+    if record.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code expired"
+        )
+
+    if record.attempts >= MAX_VERIFICATION_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Please request a new code.",
+        )
+
+    if record.code != code:
+        record.attempts += 1
+        await db.commit()
+        remaining = MAX_VERIFICATION_ATTEMPTS - record.attempts
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid code. {remaining} attempt(s) remaining.",
+        )
+
+    record.used = True
+    await db.commit()
+    return record
 
 
 DEFAULT_CATEGORIES = [

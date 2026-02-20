@@ -10,5 +10,12 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     ENVIRONMENT: str = "local"
 
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    VERIFICATION_CODE_EXPIRE_MINUTES: int = 10
+
 
 settings = Settings()
