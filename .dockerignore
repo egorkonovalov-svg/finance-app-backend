@@ -1,0 +1,39 @@
+# Virtual env and Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Git and IDE
+.git/
+.gitignore
+.cursor/
+.vscode/
+*.md
+!README.md
+
+# Alembic (keep for migrations; uncomment to exclude)
+# alembic/
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Misc
+.DS_Store
+*.log
+CLAUDE/

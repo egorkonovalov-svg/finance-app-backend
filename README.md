@@ -203,6 +203,38 @@ VERIFICATION_CODE_EXPIRE_MINUTES=10
 
 ## Installation & Setup
 
+### Option A: Docker (recommended)
+
+Ensure [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) are installed.
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd finance-app-backend
+   ```
+
+2. **Optional: create a `.env` file** in the project root to override defaults (e.g. `JWT_SECRET`, SMTP settings). Compose will use `DATABASE_URL` for the `db` service automatically.
+
+3. **Build and run**
+   ```bash
+   docker compose up --build
+   ```
+
+   The API will be at **http://localhost:8000**. PostgreSQL runs on port 5432 (host). Docs: http://localhost:8000/docs
+
+4. **Run in background**
+   ```bash
+   docker compose up -d --build
+   ```
+
+5. **Stop and remove containers**
+   ```bash
+   docker compose down
+   ```
+   Add `-v` to remove the Postgres data volume: `docker compose down -v`.
+
+### Option B: Local setup
+
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
