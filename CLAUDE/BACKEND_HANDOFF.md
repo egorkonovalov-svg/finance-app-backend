@@ -35,11 +35,13 @@ The frontend reads from `EXPO_PUBLIC_API_URL` env variable, defaulting to the ab
 
 ## 1. Authentication
 
+The backend uses **email-based 2FA** for signup and login: the user submits credentials, receives a 6-digit code by email, then submits the code to complete auth and receive a JWT.
+
 All auth endpoints are **public** (no Bearer token required) except `GET /auth/me` and `POST /auth/logout`.
 
 ### `POST /auth/signup`
 
-Register a new user.
+Register a new user. A verification code is sent to the given email. The client must call `POST /auth/verify-code` with that code to complete signup and receive a JWT.
 
 **Request body:**
 ```json
@@ -53,20 +55,14 @@ Register a new user.
 **Response `201`:**
 ```json
 {
-  "user": {
-    "id": "uuid-string",
-    "email": "user@example.com",
-    "name": "John Doe",
-    "avatar": null
-  },
-  "access_token": "jwt-token-string",
-  "refresh_token": "optional-refresh-token"
+  "session_id": "uuid-string",
+  "message": "Verification code sent to your email"
 }
 ```
 
 ### `POST /auth/login`
 
-Authenticate with email and password.
+Authenticate with email and password. A verification code is sent to the user's email. The client must call `POST /auth/verify-code` with that code to complete login and receive a JWT.
 
 **Request body:**
 ```json
@@ -76,7 +72,64 @@ Authenticate with email and password.
 }
 ```
 
-**Response `200`:** Same shape as signup response (`AuthResponse`).
+**Response `200`:**
+```json
+{
+  "session_id": "uuid-string",
+  "message": "Verification code sent to your email"
+}
+```
+
+Returns `403` with `"Email not verified. Please sign up again."` if the user has not yet verified their email.
+
+### `POST /auth/verify-code`
+
+Complete signup or login by submitting the 6-digit code sent by email. Returns the same auth response as the legacy one-step signup/login.
+
+**Request body:**
+```json
+{
+  "session_id": "uuid-from-signup-or-login-response",
+  "code": "123456"
+}
+```
+
+**Response `200` (AuthResponse):**
+```json
+{
+  "user": {
+    "id": "uuid-string",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "avatar": null
+  },
+  "access_token": "jwt-token-string",
+  "refresh_token": null
+}
+```
+
+**Errors:** `400` invalid or expired code/session, or wrong code (response includes remaining attempts); `429` too many failed attempts — user must request a new code.
+
+### `POST /auth/resend-code`
+
+Request a new verification code for the current session. Invalidates the previous code. Returns a **new** `session_id`; the client must use this for the next verify-code or resend-code call.
+
+**Request body:**
+```json
+{
+  "session_id": "uuid-from-current-session"
+}
+```
+
+**Response `200`:**
+```json
+{
+  "session_id": "new-uuid-string",
+  "message": "New verification code sent to your email"
+}
+```
+
+**Errors:** `400` invalid or already-used session; `429` maximum resend limit reached for this session.
 
 ### `POST /auth/social`
 
@@ -341,6 +394,7 @@ Delete a category.
 | `name` | VARCHAR(255) | Nullable |
 | `avatar` | VARCHAR(512) | Nullable (URL) |
 | `provider` | VARCHAR(50) | Nullable (`"google"`, `"apple"`, or null for email) |
+| `is_verified` | BOOLEAN | Default false; set true after email verification |
 | `created_at` | TIMESTAMP | Default now |
 
 ### `categories`
@@ -367,6 +421,21 @@ Delete a category.
 | `note` | TEXT | Nullable |
 | `date` | TIMESTAMP | Not null |
 | `recurring` | BOOLEAN | Default false |
+| `created_at` | TIMESTAMP | Default now |
+
+### `verification_code`
+
+Used for email 2FA. One row per sent code; `id` is returned to the client as `session_id`.
+
+| Column | Type | Constraints |
+|---|---|---|
+| `id` | UUID | Primary key (session_id) |
+| `user_id` | UUID | Foreign key -> users.id, not null |
+| `code` | VARCHAR(6) | Not null (6-digit code) |
+| `purpose` | VARCHAR(10) | Not null (`"signup"` or `"login"`) |
+| `expires_at` | TIMESTAMP | Not null (e.g. 10 minutes from creation) |
+| `used` | BOOLEAN | Default false |
+| `attempts` | INTEGER | Default 0 (wrong code attempts; lock after e.g. 5) |
 | `created_at` | TIMESTAMP | Default now |
 
 ---
@@ -406,8 +475,8 @@ DEFAULT_CATEGORIES = [
 
 Once the backend is running, update the frontend:
 
-1. In `services/api-client.ts`, set `USE_MOCK = false`
-2. Set the `EXPO_PUBLIC_API_URL` env variable to your backend URL (or use the default `http://localhost:8000/api/v1`)
+1. Set `EXPO_PUBLIC_USE_MOCK=false` (or omit it; the frontend reads this from env).
+2. Set `EXPO_PUBLIC_API_URL` to your backend base URL (default `http://localhost:8000/api/v1`). The **browser** must be able to reach this URL (e.g. when both run on the same host, use `http://localhost:8000/api/v1`).
 
 ---
 
@@ -460,3 +529,90 @@ backend/
 ├── requirements.txt
 └── .env
 ```
+
+---
+
+## 10. Docker & Compose
+
+The frontend repo includes Docker support (see its `Dockerfile` and `docker-compose.yml`). To run backend and frontend as one application, use Docker Compose with two services.
+
+**Important:** API requests are made from the **user’s browser**. So `EXPO_PUBLIC_API_URL` must be a URL the browser can reach (e.g. `http://localhost:8000/api/v1`), not an internal hostname like `http://backend:8000`, unless you use a reverse proxy that exposes the API on the same origin.
+
+### Backend Dockerfile (minimal)
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### Example: backend + database
+
+```yaml
+# docker-compose.yml (in backend repo or monorepo)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: fintrack
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Use asyncpg driver for SQLAlchemy async
+      DATABASE_URL: postgresql+asyncpg://app:secret@db:5432/fintrack
+      # JWT_SECRET, etc.
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata: {}
+```
+
+### Composing backend + frontend
+
+Run both containers in one Compose project so they share a network. Publish the backend on a port the host (and thus the browser) can reach, and point the frontend at that URL:
+
+```yaml
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://app:secret@db:5432/fintrack
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "8081:8081"
+    environment:
+      EXPO_PUBLIC_API_URL: http://localhost:8000/api/v1
+      EXPO_PUBLIC_USE_MOCK: "false"
+    depends_on:
+      - backend
+```
+
+Then `docker compose up`; open the app at `http://localhost:8081`. The browser will call `http://localhost:8000/api/v1` for the API. Ensure CORS allows the frontend origin (e.g. `http://localhost:8081`), or keep `allow_origins=["*"]` for development.
